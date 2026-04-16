@@ -24,6 +24,9 @@ const allowlist = [
   "passport-local",
   "bcryptjs",
   "postgres",
+  "socket.io",
+  "engine.io",
+  "ws",
   "stripe",
   "uuid",
   "xlsx",
@@ -62,6 +65,15 @@ async function buildAll() {
       build.onResolve({ filter: /storage-sqlite/ }, () => ({
         path: './storage-sqlite',
         external: true,
+      }));
+      // utf-8-validate is an optional native ws dep — stub it out
+      build.onResolve({ filter: /^utf-8-validate$/ }, () => ({
+        path: 'utf-8-validate',
+        namespace: 'stub-native-ns',
+      }));
+      build.onLoad({ filter: /.*/, namespace: 'stub-native-ns' }, () => ({
+        contents: 'module.exports = {};',
+        loader: 'js',
       }));
     },
   };
