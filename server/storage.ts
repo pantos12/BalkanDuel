@@ -45,7 +45,9 @@ export class PostgresStorage implements IStorage {
         ssl: 'require',
         max: 10,
         idle_timeout: 20,
-        connect_timeout: 10,
+        connect_timeout: 30,
+        // Required for Supabase transaction pooler (port 6543)
+        prepare: false,
       });
     }
     return this.sql;
