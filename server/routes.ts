@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import type { Server } from 'http';
 import { Server as SocketServer } from 'socket.io';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { storage } from './storage';
 import { requireAuth, signToken, verifyToken } from './auth';
@@ -21,7 +21,13 @@ function safeUser(user: { id: number; username: string; wins: number; losses: nu
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
   // Initialize storage (creates tables for Postgres if needed)
-  await storage.init();
+  // Wrapped in try/catch so a bad DATABASE_URL doesn't crash the server on startup.
+  // The error will surface on the first actual DB call instead.
+  try {
+    await storage.init();
+  } catch (err) {
+    console.error('[storage] init() failed:', (err as Error).message);
+  }
 
   // ── Socket.io ───────────────────────────────────────────────────────────────
   const io = new SocketServer(httpServer, {
