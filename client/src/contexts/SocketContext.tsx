@@ -15,7 +15,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (user && !socketRef.current) {
-      const s = io(window.location.origin, {
+      // Use VITE_API_URL for external backend (Railway), fallback to same-origin for local dev
+      const socketUrl = (import.meta.env.VITE_API_URL as string) || window.location.origin;
+      const s = io(socketUrl, {
         auth: { token: user.token, userId: user.id, username: user.username },
         transports: ["websocket", "polling"],
       });

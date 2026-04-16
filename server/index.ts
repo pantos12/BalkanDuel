@@ -1,10 +1,23 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
 const app = express();
 const httpServer = createServer(app);
+
+// CORS — allow Vercel frontend and local dev
+app.use(cors({
+  origin: [
+    'https://balkan-duel.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:5000',
+    /\.vercel\.app$/,
+    /\.up\.railway\.app$/,
+  ],
+  credentials: true,
+}));
 
 declare module "http" {
   interface IncomingMessage {

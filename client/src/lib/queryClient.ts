@@ -1,6 +1,8 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+// Support external backend (Railway) via VITE_API_URL, fallback to same-origin for local dev
+const _portProxy = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+const API_BASE: string = (import.meta.env.VITE_API_URL as string) || _portProxy;
 
 // Global auth token holder — set by AuthContext
 let _authToken: string | null = null;
