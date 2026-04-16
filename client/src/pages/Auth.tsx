@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 export default function Auth() {
   const { login } = useAuth();
@@ -25,11 +26,20 @@ export default function Auth() {
       return;
     }
     setIsLoading(true);
-    // Stub: POST /api/auth/login
-    await new Promise((r) => setTimeout(r, 600));
-    login({ id: 99, username: loginForm.username, token: "mock-token-123" });
-    setIsLoading(false);
-    navigate("/lobby");
+    try {
+      const res = await apiRequest("POST", "/api/auth/login", {
+        username: loginForm.username,
+        password: loginForm.password,
+      });
+      const data = await res.json();
+      login({ id: data.user.id, username: data.user.username, token: data.token });
+      navigate("/lobby");
+    } catch (err: any) {
+      const msg = err?.message || "Login failed";
+      toast({ title: "Login failed", description: msg, variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   async function handleRegister(e: React.FormEvent) {
@@ -38,16 +48,25 @@ export default function Auth() {
       toast({ title: "Ma hajde...", description: "Fill in all fields, brate.", variant: "destructive" });
       return;
     }
-    if (registerForm.password.length < 4) {
-      toast({ title: "Too short!", description: "Password needs at least 4 characters.", variant: "destructive" });
+    if (registerForm.password.length < 6) {
+      toast({ title: "Too short!", description: "Password needs at least 6 characters.", variant: "destructive" });
       return;
     }
     setIsLoading(true);
-    // Stub: POST /api/auth/register
-    await new Promise((r) => setTimeout(r, 600));
-    login({ id: 99, username: registerForm.username, token: "mock-token-456" });
-    setIsLoading(false);
-    navigate("/lobby");
+    try {
+      const res = await apiRequest("POST", "/api/auth/register", {
+        username: registerForm.username,
+        password: registerForm.password,
+      });
+      const data = await res.json();
+      login({ id: data.user.id, username: data.user.username, token: data.token });
+      navigate("/lobby");
+    } catch (err: any) {
+      const msg = err?.message || "Registration failed";
+      toast({ title: "Registration failed", description: msg, variant: "destructive" });
+    } finally {
+      setIsLoading(false);
+    }
   }
 
   return (

@@ -4,9 +4,10 @@ import { Server as SocketServer } from 'socket.io';
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { storage } from './storage';
-import { requireAuth, signToken } from './auth';
+import { requireAuth, signToken, verifyToken } from './auth';
 import { registerSchema, loginSchema } from '@shared/schema';
 import { ZodError } from 'zod';
+import { setupGameRooms } from './brain/gameRooms';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -19,39 +20,31 @@ function safeUser(user: { id: number; username: string; wins: number; losses: nu
 // ─── Main export ─────────────────────────────────────────────────────────────
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
 
+  // Initialize storage (creates tables for Postgres if needed)
+  await storage.init();
+
   // ── Socket.io ───────────────────────────────────────────────────────────────
   const io = new SocketServer(httpServer, {
     cors: { origin: '*' },
   });
 
-  io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-
-    socket.on('join_duel', (duelId: string) => {
-      socket.join(`duel:${duelId}`);
-      console.log(`Socket ${socket.id} joined duel:${duelId}`);
-
-      // Notify the room that a player joined
-      const duel = storage.getDuelById(duelId);
-      if (duel) {
-        io.to(`duel:${duelId}`).emit('duel_state', duel);
+  // JWT auth middleware for Socket.io — decode token and inject userId/username
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token as string | undefined;
+    if (token) {
+      const payload = verifyToken(token);
+      if (payload) {
+        socket.data.userId = payload.userId;
+        socket.data.username = payload.username;
       }
-    });
-
-    socket.on('player_answer', (data: { duelId: string; questionIndex: number; answer: string; timeMs: number }) => {
-      // Broadcast answer event to the duel room so both clients can react
-      socket.to(`duel:${data.duelId}`).emit('opponent_answered', {
-        questionIndex: data.questionIndex,
-        timeMs: data.timeMs,
-      });
-    });
-
-    socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
-    });
-
-    // TODO: Full game room logic will be integrated from brain module
+    }
+    // Allow connection even without auth (spectators, etc.)
+    // The brain's handlers will reject unauthorized actions.
+    next();
   });
+
+  // Wire in the brain's full game room handler
+  setupGameRooms(io);
 
   // ── Auth Routes ─────────────────────────────────────────────────────────────
 
@@ -60,14 +53,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { username, password } = registerSchema.parse(req.body);
 
-      const existing = storage.getUserByUsername(username);
+      const existing = await storage.getUserByUsername(username);
       if (existing) {
         res.status(409).json({ error: 'Username already taken' });
         return;
       }
 
       const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-      const user = storage.createUser({ username, passwordHash });
+      const user = await storage.createUser({ username, passwordHash });
       const token = signToken(user.id, user.username);
 
       res.status(201).json({ token, user: safeUser(user) });
@@ -75,6 +68,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (err instanceof ZodError) {
         res.status(400).json({ error: err.errors[0].message });
       } else {
+        console.error('Register error:', err);
         res.status(500).json({ error: 'Internal server error' });
       }
     }
@@ -85,7 +79,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const { username, password } = loginSchema.parse(req.body);
 
-      const user = storage.getUserByUsername(username);
+      const user = await storage.getUserByUsername(username);
       if (!user) {
         res.status(401).json({ error: 'Invalid credentials' });
         return;
@@ -103,15 +97,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (err instanceof ZodError) {
         res.status(400).json({ error: err.errors[0].message });
       } else {
+        console.error('Login error:', err);
         res.status(500).json({ error: 'Internal server error' });
       }
     }
   });
 
   // GET /api/auth/me
-  app.get('/api/auth/me', requireAuth, (req: Request, res: Response) => {
+  app.get('/api/auth/me', requireAuth, async (req: Request, res: Response) => {
     const { userId } = (req as any).user;
-    const user = storage.getUserById(userId);
+    const user = await storage.getUserById(userId);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
@@ -122,8 +117,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── User Routes ──────────────────────────────────────────────────────────────
 
   // GET /api/users/:username
-  app.get('/api/users/:username', (req: Request, res: Response) => {
-    const user = storage.getUserByUsername(req.params.username as string);
+  app.get('/api/users/:username', async (req: Request, res: Response) => {
+    const user = await storage.getUserByUsername(req.params.username as string);
     if (!user) {
       res.status(404).json({ error: 'User not found' });
       return;
@@ -134,16 +129,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Duel Routes ──────────────────────────────────────────────────────────────
 
   // POST /api/duels — create a new duel
-  app.post('/api/duels', requireAuth, (req: Request, res: Response) => {
+  app.post('/api/duels', requireAuth, async (req: Request, res: Response) => {
     const { userId } = (req as any).user;
     const duelId = randomUUID();
-    const duel = storage.createDuel(duelId, userId);
+    const duel = await storage.createDuel(duelId, userId);
     res.status(201).json({ duelId: duel.id, duel });
   });
 
   // GET /api/duels/:id — get duel state
-  app.get('/api/duels/:id', (req: Request, res: Response) => {
-    const duel = storage.getDuelById(req.params.id as string);
+  app.get('/api/duels/:id', async (req: Request, res: Response) => {
+    const duel = await storage.getDuelById(req.params.id as string);
     if (!duel) {
       res.status(404).json({ error: 'Duel not found' });
       return;
@@ -152,8 +147,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // GET /api/duels/:id/share — share card data for completed duel
-  app.get('/api/duels/:id/share', (req: Request, res: Response) => {
-    const duel = storage.getDuelById(req.params.id as string);
+  app.get('/api/duels/:id/share', async (req: Request, res: Response) => {
+    const duel = await storage.getDuelById(req.params.id as string);
     if (!duel) {
       res.status(404).json({ error: 'Duel not found' });
       return;
@@ -173,9 +168,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
 
     // Build enriched share card
-    const player1 = duel.player1Id ? storage.getUserById(duel.player1Id) : null;
-    const player2 = duel.player2Id ? storage.getUserById(duel.player2Id) : null;
-    const winner = duel.winnerId ? storage.getUserById(duel.winnerId) : null;
+    const player1 = duel.player1Id ? await storage.getUserById(duel.player1Id) : null;
+    const player2 = duel.player2Id ? await storage.getUserById(duel.player2Id) : null;
+    const winner = duel.winnerId ? await storage.getUserById(duel.winnerId) : null;
 
     res.json({
       duelId: duel.id,
@@ -190,9 +185,9 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // POST /api/duels/:id/join — join an existing waiting duel
-  app.post('/api/duels/:id/join', requireAuth, (req: Request, res: Response) => {
+  app.post('/api/duels/:id/join', requireAuth, async (req: Request, res: Response) => {
     const { userId } = (req as any).user;
-    const duel = storage.getDuelById(req.params.id as string);
+    const duel = await storage.getDuelById(req.params.id as string);
     if (!duel) {
       res.status(404).json({ error: 'Duel not found' });
       return;
@@ -206,7 +201,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return;
     }
 
-    const updated = storage.updateDuel(duel.id, {
+    const updated = await storage.updateDuel(duel.id, {
       player2Id: userId,
       status: 'active',
     });
@@ -218,8 +213,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // POST /api/duels/:id/complete — finalize a duel
-  app.post('/api/duels/:id/complete', requireAuth, (req: Request, res: Response) => {
-    const duel = storage.getDuelById(req.params.id as string);
+  app.post('/api/duels/:id/complete', requireAuth, async (req: Request, res: Response) => {
+    const duel = await storage.getDuelById(req.params.id as string);
     if (!duel) {
       res.status(404).json({ error: 'Duel not found' });
       return;
@@ -231,7 +226,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
     const { winnerId, player1Score, player2Score, roundsData, shareCardData } = req.body;
 
-    const updated = storage.updateDuel(duel.id, {
+    const updated = await storage.updateDuel(duel.id, {
       status: 'completed',
       winnerId: winnerId ?? null,
       player1Score: player1Score ?? duel.player1Score,
@@ -244,8 +239,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Update player stats
     if (winnerId && duel.player1Id && duel.player2Id) {
       const p1Won = winnerId === duel.player1Id;
-      storage.updateUserStats(duel.player1Id, p1Won, p1Won ? (player1Score ?? 0) : 0);
-      storage.updateUserStats(duel.player2Id, !p1Won, !p1Won ? (player2Score ?? 0) : 0);
+      await storage.updateUserStats(duel.player1Id, p1Won, p1Won ? (player1Score ?? 0) : 0);
+      await storage.updateUserStats(duel.player2Id, !p1Won, !p1Won ? (player2Score ?? 0) : 0);
     }
 
     // Notify via Socket.io
@@ -257,27 +252,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // ── Leaderboard Routes ────────────────────────────────────────────────────────
 
   // GET /api/leaderboard — top 50 players by wins
-  app.get('/api/leaderboard', (_req: Request, res: Response) => {
-    const players = storage.getLeaderboard(50);
+  app.get('/api/leaderboard', async (_req: Request, res: Response) => {
+    const players = await storage.getLeaderboard(50);
     res.json(players.map(safeUser));
   });
 
   // GET /api/leaderboard/weekly — top 50 (same data, weekly filter placeholder)
-  app.get('/api/leaderboard/weekly', (_req: Request, res: Response) => {
-    // For MVP, return the same top 50. A true weekly filter can use
-    // createdAt or a separate weekly_stats table in a later iteration.
-    const players = storage.getLeaderboard(50);
+  app.get('/api/leaderboard/weekly', async (_req: Request, res: Response) => {
+    const players = await storage.getLeaderboard(50);
     res.json(players.map(safeUser));
   });
 
   // ── Stats Route ───────────────────────────────────────────────────────────────
 
   // GET /api/stats
-  app.get('/api/stats', (_req: Request, res: Response) => {
+  app.get('/api/stats', async (_req: Request, res: Response) => {
     res.json({
-      totalDuels: storage.getTotalDuels(),
-      activeDuels: storage.getActiveDuels(),
-      totalPlayers: storage.getTotalPlayers(),
+      totalDuels: await storage.getTotalDuels(),
+      activeDuels: await storage.getActiveDuels(),
+      totalPlayers: await storage.getTotalPlayers(),
     });
   });
 

@@ -1,48 +1,104 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Link, useLocation } from "wouter";
 import { motion } from "framer-motion";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSocket } from "@/contexts/SocketContext";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  mockPlayers,
-  mockCurrentUser,
-  mockActiveDuels,
-  balkanEmotes,
-} from "@/lib/mock-data";
-import { Swords, LinkIcon, Trophy, Flame, Copy } from "lucide-react";
+import { balkanEmotes } from "@/lib/mock-data";
+import { Swords, LinkIcon, Trophy, Flame, Copy, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+
+interface LeaderboardPlayer {
+  id: number;
+  username: string;
+  wins: number;
+  losses: number;
+  currentStreak: number;
+  bestStreak: number;
+  totalPoints: number;
+}
+
+interface Stats {
+  totalDuels: number;
+  activeDuels: number;
+  totalPlayers: number;
+}
 
 export default function Lobby() {
   const { user } = useAuth();
+  const { socket } = useSocket();
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [isMatchmaking, setIsMatchmaking] = useState(false);
+  const [challengeLink, setChallengeLink] = useState<string | null>(null);
 
-  const currentUser = user
-    ? { ...mockCurrentUser, username: user.username }
-    : mockCurrentUser;
+  // Fetch leaderboard from real API
+  const { data: leaderboard = [] } = useQuery<LeaderboardPlayer[]>({
+    queryKey: ["/api/leaderboard"],
+  });
 
-  function handleChallenge() {
-    setIsMatchmaking(true);
-    // Stub: POST /api/matchmaking/queue
-    setTimeout(() => {
+  // Fetch stats
+  const { data: stats } = useQuery<Stats>({
+    queryKey: ["/api/stats"],
+  });
+
+  // Listen for match_found from socket
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleMatchFound = (data: { duelId: string }) => {
       setIsMatchmaking(false);
-      navigate("/duel/demo-123");
-    }, 1500);
+      navigate(`/duel/${data.duelId}`);
+    };
+
+    socket.on("match_found", handleMatchFound);
+    return () => {
+      socket.off("match_found", handleMatchFound);
+    };
+  }, [socket, navigate]);
+
+  const handleChallenge = useCallback(() => {
+    if (!socket || !user) return;
+    setIsMatchmaking(true);
+    socket.emit("join_lobby");
+  }, [socket, user]);
+
+  const handleCancelMatchmaking = useCallback(() => {
+    if (!socket) return;
+    setIsMatchmaking(false);
+    socket.emit("leave_lobby");
+  }, [socket]);
+
+  async function handleCreateLink() {
+    if (!user) return;
+    try {
+      const res = await apiRequest("POST", "/api/duels", undefined);
+      const data = await res.json();
+      const link = `${window.location.origin}/#/duel/${data.duelId}`;
+      setChallengeLink(link);
+      try { await navigator.clipboard.writeText(link); } catch {}
+      toast({
+        title: "Challenge link created!",
+        description: "Send it to your brate and let the duel begin.",
+      });
+    } catch (err: any) {
+      toast({
+        title: "Failed to create challenge",
+        description: err?.message || "Try again",
+        variant: "destructive",
+      });
+    }
   }
 
-  function handleCreateLink() {
-    // Stub: POST /api/challenge/create
-    const fakeLink = `${window.location.origin}/#/duel/invite-abc`;
-    navigator.clipboard?.writeText(fakeLink).catch(() => {});
-    toast({
-      title: "Challenge link copied!",
-      description: "Send it to your brate and let the duel begin.",
-    });
-  }
+  // We need to pass the auth token for apiRequest calls
+  // The queryClient's default queryFn uses raw fetch without auth headers.
+  // We'll add auth headers via a custom hook approach, or just accept
+  // that leaderboard/stats are public endpoints (no auth needed).
 
-  const topPlayers = mockPlayers.slice(0, 10);
+  const topPlayers = leaderboard.slice(0, 10);
 
   return (
     <motion.div
@@ -58,21 +114,25 @@ export default function Lobby() {
             className="w-12 h-12 rounded-sm bg-primary text-primary-foreground flex items-center justify-center font-display font-bold text-lg"
             data-testid="avatar-lobby-user"
           >
-            {currentUser.username[0].toUpperCase()}
+            {user?.username?.[0]?.toUpperCase() ?? "?"}
           </div>
           <div className="flex-1">
             <h2 className="font-display font-bold text-base" data-testid="text-lobby-username">
-              {currentUser.username}
+              {user?.username ?? "Guest"}
             </h2>
             <div className="flex gap-4 text-sm text-muted-foreground mt-0.5">
-              <span data-testid="stat-wins">
-                <Trophy className="inline w-3.5 h-3.5 mr-1 text-warning" />
-                {currentUser.wins}W / {currentUser.losses}L
-              </span>
-              <span data-testid="stat-streak">
-                <Flame className="inline w-3.5 h-3.5 mr-1 text-primary" />
-                {currentUser.streak} streak
-              </span>
+              {stats && (
+                <>
+                  <span data-testid="stat-players">
+                    <Trophy className="inline w-3.5 h-3.5 mr-1 text-warning" />
+                    {stats.totalPlayers} players
+                  </span>
+                  <span data-testid="stat-duels">
+                    <Flame className="inline w-3.5 h-3.5 mr-1 text-primary" />
+                    {stats.totalDuels} duels
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -82,14 +142,14 @@ export default function Lobby() {
           <Button
             size="lg"
             className="font-display font-bold text-base rounded-sm h-14"
-            onClick={handleChallenge}
-            disabled={isMatchmaking}
+            onClick={isMatchmaking ? handleCancelMatchmaking : handleChallenge}
             data-testid="button-challenge-random"
           >
             {isMatchmaking ? (
               <span className="flex items-center gap-2">
                 <span className="w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
-                FINDING OPPONENT...
+                LOOKING FOR OPPONENT...
+                <X className="w-4 h-4 ml-1" />
               </span>
             ) : (
               <span className="flex items-center gap-2">
@@ -109,6 +169,26 @@ export default function Lobby() {
             CREATE CHALLENGE LINK
           </Button>
         </div>
+
+        {/* Challenge link display */}
+        {challengeLink && (
+          <div className="bg-card border border-border rounded-sm p-4 flex items-center gap-3">
+            <div className="flex-1 text-sm font-mono truncate text-muted-foreground" data-testid="text-challenge-link">
+              {challengeLink}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                try { navigator.clipboard.writeText(challengeLink); } catch {}
+                toast({ title: "Copied!" });
+              }}
+              data-testid="button-copy-link"
+            >
+              <Copy className="w-4 h-4" />
+            </Button>
+          </div>
+        )}
 
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Leaderboard panel */}
@@ -130,6 +210,13 @@ export default function Lobby() {
                   </tr>
                 </thead>
                 <tbody>
+                  {topPlayers.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-6 text-center text-muted-foreground text-sm">
+                        No players yet. Be the first!
+                      </td>
+                    </tr>
+                  )}
                   {topPlayers.map((p, i) => (
                     <tr
                       key={p.id}
@@ -149,8 +236,8 @@ export default function Lobby() {
                       </td>
                       <td className="px-4 py-2.5 text-right font-medium">{p.wins}</td>
                       <td className="px-4 py-2.5 text-right">
-                        {p.streak > 0 && (
-                          <span className="text-primary font-semibold">{p.streak}🔥</span>
+                        {p.currentStreak > 0 && (
+                          <span className="text-primary font-semibold">{p.currentStreak}🔥</span>
                         )}
                       </td>
                     </tr>
@@ -183,25 +270,21 @@ export default function Lobby() {
               </div>
             </div>
 
-            {/* Active duels ticker */}
-            <div className="bg-card border border-border rounded-sm overflow-hidden">
-              <h3 className="font-display font-semibold text-sm px-4 py-3 border-b border-border">
-                LIVE DUELS
-              </h3>
-              <div className="relative h-32 overflow-hidden">
-                <div className="animate-marquee flex flex-col">
-                  {[...mockActiveDuels, ...mockActiveDuels].map((d, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2 px-4 py-2.5 text-sm border-b border-border/50"
-                    >
-                      <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                      <span className="font-medium">{d.player1}</span>
-                      <span className="text-primary font-display font-bold text-xs">VS</span>
-                      <span className="font-medium">{d.player2}</span>
-                      <span className="text-xs text-muted-foreground ml-auto">R{d.round}</span>
-                    </div>
-                  ))}
+            {/* Stats panel */}
+            <div className="bg-card border border-border rounded-sm p-4">
+              <h3 className="font-display font-semibold text-sm mb-3">ARENA STATS</h3>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Duels</span>
+                  <span className="font-medium" data-testid="stat-total-duels">{stats?.totalDuels ?? 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Active Now</span>
+                  <span className="font-medium" data-testid="stat-active-duels">{stats?.activeDuels ?? 0}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Players</span>
+                  <span className="font-medium" data-testid="stat-total-players">{stats?.totalPlayers ?? 0}</span>
                 </div>
               </div>
             </div>

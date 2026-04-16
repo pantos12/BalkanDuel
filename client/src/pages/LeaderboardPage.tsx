@@ -1,25 +1,47 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { useQuery } from "@tanstack/react-query";
 import { mockPlayers } from "@/lib/mock-data";
-import { Trophy, Medal, Flame } from "lucide-react";
-import { Button } from "@/components/ui/button";
 
-type TimeFilter = "all" | "week" | "today";
+type TimeFilter = "all" | "week";
 
 const filterLabels: Record<TimeFilter, string> = {
   all: "All Time",
   week: "This Week",
-  today: "Today",
 };
+
+interface LeaderboardPlayer {
+  id: number;
+  username: string;
+  wins: number;
+  losses: number;
+  currentStreak: number;
+  bestStreak: number;
+  totalPoints: number;
+}
 
 export default function LeaderboardPage() {
   const [filter, setFilter] = useState<TimeFilter>("all");
 
-  // Mock: same data for all filters with slight variations
-  const players = mockPlayers.map((p, i) => ({
-    ...p,
-    wins: filter === "today" ? Math.floor(p.wins / 20) : filter === "week" ? Math.floor(p.wins / 4) : p.wins,
-  }));
+  const { data: allTimePlayers = [] } = useQuery<LeaderboardPlayer[]>({
+    queryKey: ["/api/leaderboard"],
+  });
+
+  const { data: weeklyPlayers = [] } = useQuery<LeaderboardPlayer[]>({
+    queryKey: ["/api/leaderboard/weekly"],
+  });
+
+  // Use real data if available, else fall back to mock
+  const realPlayers = filter === "week" ? weeklyPlayers : allTimePlayers;
+  const players = realPlayers.length > 0
+    ? realPlayers.map((p) => ({
+        id: p.id,
+        username: p.username,
+        wins: p.wins,
+        losses: p.losses,
+        streak: p.currentStreak,
+      }))
+    : mockPlayers;
 
   const podium = players.slice(0, 3);
   const rest = players.slice(3);
@@ -55,64 +77,66 @@ export default function LeaderboardPage() {
         </div>
 
         {/* Podium */}
-        <div className="flex items-end justify-center gap-3 pt-4 pb-6">
-          {/* 2nd place */}
-          <motion.div
-            className="flex flex-col items-center"
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.2 }}
-          >
-            <div className="w-14 h-14 rounded-sm bg-card border-2 border-border flex items-center justify-center font-display font-bold text-lg" data-testid="podium-2">
-              {podium[1]?.username[0]}
-            </div>
-            <div className="text-sm font-medium mt-2 text-center truncate max-w-[80px]">
-              {podium[1]?.username}
-            </div>
-            <div className="text-xs text-muted-foreground">{podium[1]?.wins}W</div>
-            <div className="w-20 h-16 bg-muted/60 border border-border rounded-t-sm mt-2 flex items-center justify-center">
-              <span className="text-2xl">🥈</span>
-            </div>
-          </motion.div>
+        {podium.length >= 3 && (
+          <div className="flex items-end justify-center gap-3 pt-4 pb-6">
+            {/* 2nd place */}
+            <motion.div
+              className="flex flex-col items-center"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.2 }}
+            >
+              <div className="w-14 h-14 rounded-sm bg-card border-2 border-border flex items-center justify-center font-display font-bold text-lg" data-testid="podium-2">
+                {podium[1]?.username[0]}
+              </div>
+              <div className="text-sm font-medium mt-2 text-center truncate max-w-[80px]">
+                {podium[1]?.username}
+              </div>
+              <div className="text-xs text-muted-foreground">{podium[1]?.wins}W</div>
+              <div className="w-20 h-16 bg-muted/60 border border-border rounded-t-sm mt-2 flex items-center justify-center">
+                <span className="text-2xl">🥈</span>
+              </div>
+            </motion.div>
 
-          {/* 1st place */}
-          <motion.div
-            className="flex flex-col items-center -mt-4"
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.1 }}
-          >
-            <div className="w-16 h-16 rounded-sm bg-primary/10 border-2 border-primary flex items-center justify-center font-display font-bold text-xl" data-testid="podium-1">
-              {podium[0]?.username[0]}
-            </div>
-            <div className="text-sm font-semibold mt-2 text-center truncate max-w-[100px]">
-              {podium[0]?.username}
-            </div>
-            <div className="text-xs text-muted-foreground">{podium[0]?.wins}W</div>
-            <div className="w-24 h-24 bg-primary/10 border border-primary/30 rounded-t-sm mt-2 flex items-center justify-center">
-              <span className="text-3xl">🥇</span>
-            </div>
-          </motion.div>
+            {/* 1st place */}
+            <motion.div
+              className="flex flex-col items-center -mt-4"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.1 }}
+            >
+              <div className="w-16 h-16 rounded-sm bg-primary/10 border-2 border-primary flex items-center justify-center font-display font-bold text-xl" data-testid="podium-1">
+                {podium[0]?.username[0]}
+              </div>
+              <div className="text-sm font-semibold mt-2 text-center truncate max-w-[100px]">
+                {podium[0]?.username}
+              </div>
+              <div className="text-xs text-muted-foreground">{podium[0]?.wins}W</div>
+              <div className="w-24 h-24 bg-primary/10 border border-primary/30 rounded-t-sm mt-2 flex items-center justify-center">
+                <span className="text-3xl">🥇</span>
+              </div>
+            </motion.div>
 
-          {/* 3rd place */}
-          <motion.div
-            className="flex flex-col items-center"
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.3 }}
-          >
-            <div className="w-14 h-14 rounded-sm bg-card border-2 border-border flex items-center justify-center font-display font-bold text-lg" data-testid="podium-3">
-              {podium[2]?.username[0]}
-            </div>
-            <div className="text-sm font-medium mt-2 text-center truncate max-w-[80px]">
-              {podium[2]?.username}
-            </div>
-            <div className="text-xs text-muted-foreground">{podium[2]?.wins}W</div>
-            <div className="w-20 h-12 bg-muted/40 border border-border rounded-t-sm mt-2 flex items-center justify-center">
-              <span className="text-2xl">🥉</span>
-            </div>
-          </motion.div>
-        </div>
+            {/* 3rd place */}
+            <motion.div
+              className="flex flex-col items-center"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.3 }}
+            >
+              <div className="w-14 h-14 rounded-sm bg-card border-2 border-border flex items-center justify-center font-display font-bold text-lg" data-testid="podium-3">
+                {podium[2]?.username[0]}
+              </div>
+              <div className="text-sm font-medium mt-2 text-center truncate max-w-[80px]">
+                {podium[2]?.username}
+              </div>
+              <div className="text-xs text-muted-foreground">{podium[2]?.wins}W</div>
+              <div className="w-20 h-12 bg-muted/40 border border-border rounded-t-sm mt-2 flex items-center justify-center">
+                <span className="text-2xl">🥉</span>
+              </div>
+            </motion.div>
+          </div>
+        )}
 
         {/* Rest of leaderboard */}
         <div className="bg-card border border-border rounded-sm overflow-hidden">
@@ -127,6 +151,13 @@ export default function LeaderboardPage() {
               </tr>
             </thead>
             <tbody>
+              {rest.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-6 text-center text-muted-foreground text-sm">
+                    No players yet.
+                  </td>
+                </tr>
+              )}
               {rest.map((p, i) => (
                 <motion.tr
                   key={p.id}

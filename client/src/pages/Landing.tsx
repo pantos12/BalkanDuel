@@ -67,7 +67,7 @@ export default function Landing() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4, duration: 0.6 }}
         >
-          BALKAN DUEL <span className="inline-block">⚔️</span>
+          BALKAN DUEL
         </motion.h1>
 
         {/* Subtitle */}

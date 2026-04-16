@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { setAuthToken } from "@/lib/queryClient";
 
 export interface User {
   id: number;
@@ -16,6 +17,11 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+
+  // Sync token to queryClient whenever user changes
+  useEffect(() => {
+    setAuthToken(user?.token ?? null);
+  }, [user]);
 
   const login = useCallback((u: User) => setUser(u), []);
   const logout = useCallback(() => setUser(null), []);
