@@ -1,4 +1,4 @@
-import { build as esbuild } from "esbuild";
+import { build as esbuild, type Plugin } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
 
@@ -44,6 +44,27 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
+  // Force native-only modules to always be external (never bundled)
+  // These modules use native Node.js bindings that won't work on Vercel serverless
+  const nativeExternal = ['better-sqlite3', 'drizzle-orm/better-sqlite3', './storage-sqlite', './storage-sqlite.js'];
+
+  // Stub plugin: replace better-sqlite3 with an empty module at build time
+  // so it doesn't get bundled at all
+  const stubNativePlugin: Plugin = {
+    name: 'stub-native',
+    setup(build) {
+      // Make better-sqlite3 return a stub when required in production bundle
+      build.onResolve({ filter: /^better-sqlite3$/ }, () => ({
+        path: 'better-sqlite3',
+        external: true,
+      }));
+      build.onResolve({ filter: /storage-sqlite/ }, () => ({
+        path: './storage-sqlite',
+        external: true,
+      }));
+    },
+  };
+
   await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
@@ -54,7 +75,8 @@ async function buildAll() {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
-    external: externals,
+    external: [...externals, ...nativeExternal],
+    plugins: [stubNativePlugin],
     logLevel: "info",
   });
 }

@@ -27,151 +27,32 @@ export interface IStorage {
   init(): Promise<void>;
 }
 
-// ─── SQLite Storage (local dev only) ─────────────────────────────────────────
-// Uses better-sqlite3 + drizzle-orm/better-sqlite3 for synchronous local dev.
-
-export class DatabaseStorage implements IStorage {
-  private db: any;
-
-  constructor() {
-    // These imports are safe locally — better-sqlite3 is installed for dev
-    const Database = require('better-sqlite3');
-    const { drizzle } = require('drizzle-orm/better-sqlite3');
-    const path = require('path');
-    const schema = require('../shared/schema');
-
-    const sqlite = new Database(path.join(process.cwd(), 'balkanduel.db'));
-    sqlite.pragma('journal_mode = WAL');
-    sqlite.pragma('foreign_keys = ON');
-    this.db = drizzle(sqlite, { schema });
-  }
-
-  async init(): Promise<void> {
-    // SQLite tables are created via drizzle-kit push — nothing needed here
-  }
-
-  async createUser(data: { username: string; passwordHash: string }): Promise<User> {
-    const { users } = require('../shared/schema');
-    return this.db.insert(users).values({
-      username: data.username,
-      passwordHash: data.passwordHash,
-      wins: 0, losses: 0, currentStreak: 0, bestStreak: 0, totalPoints: 0,
-      createdAt: Date.now(),
-    }).returning().get()!;
-  }
-
-  async getUserById(id: number): Promise<User | undefined> {
-    const { users } = require('../shared/schema');
-    const { eq } = require('drizzle-orm');
-    return this.db.select().from(users).where(eq(users.id, id)).get();
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    const { users } = require('../shared/schema');
-    const { eq } = require('drizzle-orm');
-    return this.db.select().from(users).where(eq(users.username, username)).get();
-  }
-
-  async updateUserStats(id: number, won: boolean, pointsEarned: number): Promise<void> {
-    const user = await this.getUserById(id);
-    if (!user) return;
-    const { users } = require('../shared/schema');
-    const { eq } = require('drizzle-orm');
-    const newStreak = won ? user.currentStreak + 1 : 0;
-    this.db.update(users).set({
-      wins: won ? user.wins + 1 : user.wins,
-      losses: won ? user.losses : user.losses + 1,
-      currentStreak: newStreak,
-      bestStreak: Math.max(user.bestStreak, newStreak),
-      totalPoints: user.totalPoints + pointsEarned,
-    }).where(eq(users.id, id)).run();
-  }
-
-  async getLeaderboard(limit = 100): Promise<User[]> {
-    const { users } = require('../shared/schema');
-    const { desc } = require('drizzle-orm');
-    return this.db.select().from(users).orderBy(desc(users.wins)).limit(limit).all();
-  }
-
-  async createDuel(id: string, player1Id: number): Promise<Duel> {
-    const { duels } = require('../shared/schema');
-    return this.db.insert(duels).values({
-      id, player1Id, status: 'waiting',
-      player1Score: 0, player2Score: 0, roundsData: '[]',
-      createdAt: Date.now(),
-    }).returning().get()!;
-  }
-
-  async getDuelById(id: string): Promise<Duel | undefined> {
-    const { duels } = require('../shared/schema');
-    const { eq } = require('drizzle-orm');
-    return this.db.select().from(duels).where(eq(duels.id, id)).get();
-  }
-
-  async updateDuel(id: string, updates: Partial<Duel>): Promise<Duel | undefined> {
-    const { duels } = require('../shared/schema');
-    const { eq } = require('drizzle-orm');
-    this.db.update(duels).set(updates).where(eq(duels.id, id)).run();
-    return this.getDuelById(id);
-  }
-
-  async getRecentDuels(limit = 20): Promise<Duel[]> {
-    const { duels } = require('../shared/schema');
-    const { eq, desc } = require('drizzle-orm');
-    return this.db.select().from(duels)
-      .where(eq(duels.status, 'completed'))
-      .orderBy(desc(duels.completedAt))
-      .limit(limit).all();
-  }
-
-  async getUserDuels(userId: number): Promise<Duel[]> {
-    const { duels } = require('../shared/schema');
-    const { desc, sql } = require('drizzle-orm');
-    return this.db.select().from(duels)
-      .where(sql`${duels.player1Id} = ${userId} OR ${duels.player2Id} = ${userId}`)
-      .orderBy(desc(duels.createdAt))
-      .limit(20).all();
-  }
-
-  async getTotalDuels(): Promise<number> {
-    const { duels } = require('../shared/schema');
-    const { sql } = require('drizzle-orm');
-    const result = this.db.select({ count: sql<number>`count(*)` }).from(duels).get();
-    return result?.count ?? 0;
-  }
-
-  async getActiveDuels(): Promise<number> {
-    const { duels } = require('../shared/schema');
-    const { eq, sql } = require('drizzle-orm');
-    const result = this.db.select({ count: sql<number>`count(*)` })
-      .from(duels).where(eq(duels.status, 'active')).get();
-    return result?.count ?? 0;
-  }
-
-  async getTotalPlayers(): Promise<number> {
-    const { users } = require('../shared/schema');
-    const { sql } = require('drizzle-orm');
-    const result = this.db.select({ count: sql<number>`count(*)` }).from(users).get();
-    return result?.count ?? 0;
-  }
-}
-
 // ─── Postgres Storage (Supabase production) ──────────────────────────────────
 
 export class PostgresStorage implements IStorage {
   private sql: any;
+  private connectionString: string;
 
   constructor(connectionString: string) {
-    const pg = require('postgres');
-    this.sql = pg(connectionString, {
-      ssl: 'require',
-      max: 10,
-      idle_timeout: 20,
-    });
+    this.connectionString = connectionString;
+    // Lazy — do NOT connect here. Connection opens on first query.
+  }
+
+  private getSql() {
+    if (!this.sql) {
+      const pg = require('postgres');
+      this.sql = pg(this.connectionString, {
+        ssl: 'require',
+        max: 10,
+        idle_timeout: 20,
+        connect_timeout: 10,
+      });
+    }
+    return this.sql;
   }
 
   async init(): Promise<void> {
-    await this.sql`
+    await this.getSql()`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
         username TEXT NOT NULL UNIQUE,
@@ -184,7 +65,7 @@ export class PostgresStorage implements IStorage {
         created_at BIGINT NOT NULL
       )
     `;
-    await this.sql`
+    await this.getSql()`
       CREATE TABLE IF NOT EXISTS duels (
         id TEXT PRIMARY KEY,
         player1_id INTEGER NOT NULL REFERENCES users(id),
@@ -202,7 +83,7 @@ export class PostgresStorage implements IStorage {
   }
 
   async createUser(data: { username: string; passwordHash: string }): Promise<User> {
-    const [user] = await this.sql`
+    const [user] = await this.getSql()`
       INSERT INTO users (username, password_hash, wins, losses, current_streak, best_streak, total_points, created_at)
       VALUES (${data.username}, ${data.passwordHash}, 0, 0, 0, 0, 0, ${Date.now()})
       RETURNING *
@@ -211,12 +92,12 @@ export class PostgresStorage implements IStorage {
   }
 
   async getUserById(id: number): Promise<User | undefined> {
-    const [user] = await this.sql`SELECT * FROM users WHERE id = ${id}`;
+    const [user] = await this.getSql()`SELECT * FROM users WHERE id = ${id}`;
     return user ? this.mapUser(user) : undefined;
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    const [user] = await this.sql`SELECT * FROM users WHERE username = ${username}`;
+    const [user] = await this.getSql()`SELECT * FROM users WHERE username = ${username}`;
     return user ? this.mapUser(user) : undefined;
   }
 
@@ -224,7 +105,7 @@ export class PostgresStorage implements IStorage {
     const user = await this.getUserById(id);
     if (!user) return;
     const newStreak = won ? user.currentStreak + 1 : 0;
-    await this.sql`
+    await this.getSql()`
       UPDATE users SET
         wins = wins + ${won ? 1 : 0},
         losses = losses + ${won ? 0 : 1},
@@ -236,12 +117,12 @@ export class PostgresStorage implements IStorage {
   }
 
   async getLeaderboard(limit = 100): Promise<User[]> {
-    const rows = await this.sql`SELECT * FROM users ORDER BY wins DESC LIMIT ${limit}`;
+    const rows = await this.getSql()`SELECT * FROM users ORDER BY wins DESC LIMIT ${limit}`;
     return rows.map((r: any) => this.mapUser(r));
   }
 
   async createDuel(id: string, player1Id: number): Promise<Duel> {
-    const [duel] = await this.sql`
+    const [duel] = await this.getSql()`
       INSERT INTO duels (id, player1_id, status, player1_score, player2_score, rounds_data, created_at)
       VALUES (${id}, ${player1Id}, 'waiting', 0, 0, '[]', ${Date.now()})
       RETURNING *
@@ -250,60 +131,60 @@ export class PostgresStorage implements IStorage {
   }
 
   async getDuelById(id: string): Promise<Duel | undefined> {
-    const [duel] = await this.sql`SELECT * FROM duels WHERE id = ${id}`;
+    const [duel] = await this.getSql()`SELECT * FROM duels WHERE id = ${id}`;
     return duel ? this.mapDuel(duel) : undefined;
   }
 
   async updateDuel(id: string, updates: Partial<Duel>): Promise<Duel | undefined> {
     if (updates.player2Id !== undefined) {
-      await this.sql`UPDATE duels SET player2_id = ${updates.player2Id} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET player2_id = ${updates.player2Id} WHERE id = ${id}`;
     }
     if (updates.status !== undefined) {
-      await this.sql`UPDATE duels SET status = ${updates.status} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET status = ${updates.status} WHERE id = ${id}`;
     }
     if (updates.winnerId !== undefined) {
-      await this.sql`UPDATE duels SET winner_id = ${updates.winnerId} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET winner_id = ${updates.winnerId} WHERE id = ${id}`;
     }
     if (updates.player1Score !== undefined) {
-      await this.sql`UPDATE duels SET player1_score = ${updates.player1Score} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET player1_score = ${updates.player1Score} WHERE id = ${id}`;
     }
     if (updates.player2Score !== undefined) {
-      await this.sql`UPDATE duels SET player2_score = ${updates.player2Score} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET player2_score = ${updates.player2Score} WHERE id = ${id}`;
     }
     if (updates.roundsData !== undefined) {
-      await this.sql`UPDATE duels SET rounds_data = ${updates.roundsData} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET rounds_data = ${updates.roundsData} WHERE id = ${id}`;
     }
     if (updates.shareCardData !== undefined) {
-      await this.sql`UPDATE duels SET share_card_data = ${updates.shareCardData} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET share_card_data = ${updates.shareCardData} WHERE id = ${id}`;
     }
     if (updates.completedAt !== undefined) {
-      await this.sql`UPDATE duels SET completed_at = ${updates.completedAt} WHERE id = ${id}`;
+      await this.getSql()`UPDATE duels SET completed_at = ${updates.completedAt} WHERE id = ${id}`;
     }
     return this.getDuelById(id);
   }
 
   async getRecentDuels(limit = 20): Promise<Duel[]> {
-    const rows = await this.sql`SELECT * FROM duels WHERE status = 'completed' ORDER BY completed_at DESC LIMIT ${limit}`;
+    const rows = await this.getSql()`SELECT * FROM duels WHERE status = 'completed' ORDER BY completed_at DESC LIMIT ${limit}`;
     return rows.map((r: any) => this.mapDuel(r));
   }
 
   async getUserDuels(userId: number): Promise<Duel[]> {
-    const rows = await this.sql`SELECT * FROM duels WHERE player1_id = ${userId} OR player2_id = ${userId} ORDER BY created_at DESC LIMIT 20`;
+    const rows = await this.getSql()`SELECT * FROM duels WHERE player1_id = ${userId} OR player2_id = ${userId} ORDER BY created_at DESC LIMIT 20`;
     return rows.map((r: any) => this.mapDuel(r));
   }
 
   async getTotalDuels(): Promise<number> {
-    const [r] = await this.sql`SELECT COUNT(*) as count FROM duels`;
+    const [r] = await this.getSql()`SELECT COUNT(*) as count FROM duels`;
     return Number(r.count);
   }
 
   async getActiveDuels(): Promise<number> {
-    const [r] = await this.sql`SELECT COUNT(*) as count FROM duels WHERE status = 'active'`;
+    const [r] = await this.getSql()`SELECT COUNT(*) as count FROM duels WHERE status = 'active'`;
     return Number(r.count);
   }
 
   async getTotalPlayers(): Promise<number> {
-    const [r] = await this.sql`SELECT COUNT(*) as count FROM users`;
+    const [r] = await this.getSql()`SELECT COUNT(*) as count FROM users`;
     return Number(r.count);
   }
 
@@ -348,9 +229,12 @@ function createStorage(): IStorage {
     return new PostgresStorage(process.env.DATABASE_URL);
   }
   // Only import SQLite in non-production environments
+  // Use dynamic require so esbuild does NOT statically bundle better-sqlite3
   if (process.env.NODE_ENV === 'production') {
     throw new Error('DATABASE_URL must be set in production. SQLite is only for local development.');
   }
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { DatabaseStorage } = require('./storage-sqlite');
   return new DatabaseStorage();
 }
 
