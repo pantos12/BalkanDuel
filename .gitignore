@@ -1,8 +1,9 @@
 node_modules/
-dist/
 .env
 *.db
 *.db-shm
 *.db-wal
 .DS_Store
 skills/
+.vercel
+# dist/ is tracked for Vercel deployment

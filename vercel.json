@@ -1,15 +1,18 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.ts": {
-      "memory": 1024,
-      "maxDuration": 30
+  "builds": [
+    {
+      "src": "dist/index.cjs",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["dist/**"]
+      }
     }
-  },
+  ],
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/api/index.ts"
+      "dest": "/dist/index.cjs"
     }
   ]
 }
