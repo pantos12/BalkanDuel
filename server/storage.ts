@@ -339,7 +339,19 @@ export class PostgresStorage implements IStorage {
 }
 
 // ─── Export the correct storage based on environment ──────────────────────────
+// IMPORTANT: DatabaseStorage (SQLite) must only be instantiated when DATABASE_URL
+// is NOT set. On Vercel/serverless, better-sqlite3 native bindings are not
+// available, so we must never call `new DatabaseStorage()` in production.
 
-export const storage: IStorage = process.env.DATABASE_URL
-  ? new PostgresStorage(process.env.DATABASE_URL)
-  : new DatabaseStorage();
+function createStorage(): IStorage {
+  if (process.env.DATABASE_URL) {
+    return new PostgresStorage(process.env.DATABASE_URL);
+  }
+  // Only import SQLite in non-production environments
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('DATABASE_URL must be set in production. SQLite is only for local development.');
+  }
+  return new DatabaseStorage();
+}
+
+export const storage: IStorage = createStorage();
